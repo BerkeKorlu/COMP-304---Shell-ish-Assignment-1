@@ -322,35 +322,89 @@ int process_command(struct command_t *command) {
       return SUCCESS;
     }
   }
+  // PIPE HANDLING 
+  if (command->next) {
+
+    int fd[2];
+    pipe(fd); // fd[0] = read end, fd[1] = write end
+
+    pid_t pid1 = fork();
+
+    if (pid1 == 0) { // first child 
+      dup2(fd[1], STDOUT_FILENO); // Redirect stdout to pipe write end
+      close(fd[0]);
+      close(fd[1]);
+      
+      process_command(command);  // Execute current command
+      exit(0);
+    }
+
+    pid_t pid2 = fork();
+
+    if (pid2 == 0) { // second child 
+      dup2(fd[0], STDIN_FILENO); // Redirect stdin to pipe read end
+      close(fd[1]);
+      close(fd[0]);
+
+      process_command(command->next);// Execute next command
+      exit(0);
+    }
+    // Close pipe
+    close(fd[0]);
+    close(fd[1]);
+    // Wait for children to finish
+    waitpid(pid1, NULL, 0);
+    waitpid(pid2, NULL, 0);
+
+    return SUCCESS;
+  }
 
   pid_t pid = fork();
   if (pid == 0) // child
   {
+
+    // (<) Redirection
+    // Replace stdin with file
+    if (command->redirects[0]){
+      int fd = open(command->redirects[0], O_RDONLY); 
+      dup2(fd, STDIN_FILENO);
+      close(fd);
+    }
+    // (>) Redirection
+    // Create or truncate file
+    if (command->redirects[1]){
+      int fd = open(command->redirects[1],O_WRONLY | O_CREAT | O_TRUNC,0644); 
+      dup2(fd, STDOUT_FILENO);
+      close(fd);
+    }
+
+    // (>>) Redirection
+    // Append output to file
+    if (command->redirects[2]){
+      int fd = open(command->redirects[2],O_WRONLY | O_CREAT | O_APPEND,0644);
+        dup2(fd, STDOUT_FILENO);
+        close(fd);
+    }
+
+    //MANUAL PATH RESOLUTION
     char *path = getenv("PATH");
     int path_len = strlen(path) + 1;
-    char path_copied[4096]; // path is copied not to distort with strtok
+    char path_copied[4096]; // Path is copied not to modify original file
     strncpy(path_copied, path, path_len);
-
-    /// This shows how to do exec with environ (but is not available on MacOs)
-    // extern char** environ; // environment variables
-    // execvpe(command->name, command->args, environ); // exec+args+path+environ
+    
     char *dir = strtok(path_copied, ":");
     char full_path[4096];
+
+    // Try each directory in PATH
     while (dir != NULL) {
       full_path[0] = '\0';
       strcat(full_path, dir);
       strcat(full_path, "/");
       strcat(full_path, command->name);
+      // Try executing constructed path
       execv(full_path, command->args);
       dir = strtok(NULL, ":");
 }
-    /// This shows how to do exec with auto-path resolve
-    // add a NULL argument to the end of args, and the name to the beginning
-    // as required by exec
-
-    // TODO: do your own exec with path resolving using execv()
-    // do so by replacing the execvp call below
-    // execvp(command->name, command->args); // exec+args+path
     printf("-%s: %s: command not found\n", sysname, command->name);
     exit(127);
   } else {
