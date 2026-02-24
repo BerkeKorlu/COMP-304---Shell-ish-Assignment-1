@@ -6,6 +6,7 @@
 #include <sys/wait.h>
 #include <termios.h> // termios, TCSANOW, ECHO, ICANON
 #include <unistd.h>
+#include <fcntl.h>
 const char *sysname = "shellish";
 
 enum return_codes {
@@ -305,8 +306,48 @@ int prompt(struct command_t *command) {
   tcsetattr(STDIN_FILENO, TCSANOW, &backup_termios);
   return SUCCESS;
 }
+void exec_with_path(struct command_t *command);// Helper function for exec
 
 int process_command(struct command_t *command) {
+
+  // PIPE HANDLING 
+  if (command->next) {
+
+    int fd[2];
+    pipe(fd); // fd[0] = read end, fd[1] = write end
+
+    pid_t pid1 = fork();
+
+    if (pid1 == 0) { // first child 
+      dup2(fd[1], STDOUT_FILENO); // Redirect stdout to pipe write end
+      close(fd[0]);
+      close(fd[1]);
+
+      exec_with_path(command);   
+      exit(1);
+    }
+    pid_t pid2 = fork();
+
+    if (pid2 == 0) { // second child 
+      dup2(fd[0], STDIN_FILENO); // Redirect stdin to pipe read end
+      close(fd[1]);
+      close(fd[0]);
+
+      process_command(command->next); // Recursively call next
+      exit(0);
+    }
+    // Close pipe
+    close(fd[0]);
+    close(fd[1]);
+    // Wait for children to finish
+    waitpid(pid1, NULL, 0);
+    waitpid(pid2, NULL, 0);
+
+    return SUCCESS;
+  }
+  
+  //Built-in Commands
+
   int r;
   if (strcmp(command->name, "") == 0)
     return SUCCESS;
@@ -322,40 +363,81 @@ int process_command(struct command_t *command) {
       return SUCCESS;
     }
   }
-  // PIPE HANDLING 
-  if (command->next) {
+  if (strcmp(command->name, "cut") == 0) {
 
-    int fd[2];
-    pipe(fd); // fd[0] = read end, fd[1] = write end
+    char delimiter = '\t'; // Deault delimeter is tab
+    char *fields_string = NULL;
+    int delimiter_seen = 0; 
+    int field_seen = 0;
 
-    pid_t pid1 = fork();
+    for (int i = 1; command->args[i] != NULL; i++){
+    
+      if (strcmp(command->args[i], "-d") == 0 && delimiter_seen == 0){
+        if (command->args[i + 1] == NULL) {
+          printf("Missing delimiter\n");
+          return SUCCESS;
+    }
+        
+        delimiter= command->args[i+1][0];
+        delimiter_seen++;
+        i++;
+      }
 
-    if (pid1 == 0) { // first child 
-      dup2(fd[1], STDOUT_FILENO); // Redirect stdout to pipe write end
-      close(fd[0]);
-      close(fd[1]);
-      
-      process_command(command);  // Execute current command
-      exit(0);
+      else if (strcmp(command->args[i], "-f") == 0 && field_seen == 0) {
+    
+        if (command->args[i + 1] == NULL) {
+          printf("Missing field\n");
+          return SUCCESS;
+        }
+
+        fields_string = command->args[i + 1];
+        field_seen = 1;
+        i++;  
+      }
+    }
+    if (field_seen == 0){ // Field has to be provided
+      printf("Missing field\n");
+      return SUCCESS;
     }
 
-    pid_t pid2 = fork();
+    //Turn Fields into int array
+    int fields[100];
+    int field_count = 0;
+    char temp[256];
+    strcpy(temp, fields_string);  //strtok change original string
 
-    if (pid2 == 0) { // second child 
-      dup2(fd[0], STDIN_FILENO); // Redirect stdin to pipe read end
-      close(fd[1]);
-      close(fd[0]);
-
-      process_command(command->next);// Execute next command
-      exit(0);
+    char *token = strtok(temp, ",");
+    while (token != NULL) {
+        fields[field_count] = atoi(token);
+        field_count++;
+        token = strtok(NULL, ",");
     }
-    // Close pipe
-    close(fd[0]);
-    close(fd[1]);
-    // Wait for children to finish
-    waitpid(pid1, NULL, 0);
-    waitpid(pid2, NULL, 0);
 
+    // Read each line
+    char line[1024];
+    char delimeter_string[2] = { delimiter, '\0' };
+
+    while (fgets(line, sizeof(line), stdin) != NULL) {
+      char *token = strtok(line, delimeter_string);
+      int token_count = 0;
+      int printed = 0;
+
+      while (token != NULL) {
+        token_count++;
+
+        for (int i = 0; i < field_count; i++){
+          if(token_count== fields[i]){
+            if (printed) {
+              printf("%c", delimiter);
+            }
+            printf("%s", token);
+            printed = 1;
+          }
+        }
+      token = strtok(NULL, delimeter_string);
+      }
+      printf("\n");
+    }
     return SUCCESS;
   }
 
@@ -385,8 +467,19 @@ int process_command(struct command_t *command) {
         dup2(fd, STDOUT_FILENO);
         close(fd);
     }
+    exec_with_path(command);
+  } 
+  else {
+    // TODO: implement background processes here
+    if (command->background != true){
+      wait(0); // wait for child process to finish
+    }
+    return SUCCESS;
+  }
+}
 
-    //MANUAL PATH RESOLUTION
+void exec_with_path(struct command_t *command) {
+ //MANUAL PATH RESOLUTION
     char *path = getenv("PATH");
     int path_len = strlen(path) + 1;
     char path_copied[4096]; // Path is copied not to modify original file
@@ -404,16 +497,9 @@ int process_command(struct command_t *command) {
       // Try executing constructed path
       execv(full_path, command->args);
       dir = strtok(NULL, ":");
-}
+    }
     printf("-%s: %s: command not found\n", sysname, command->name);
     exit(127);
-  } else {
-    // TODO: implement background processes here
-    if (command->background != true){
-      wait(0); // wait for child process to finish
-    }
-    return SUCCESS;
-  }
 }
 
 int main() {
