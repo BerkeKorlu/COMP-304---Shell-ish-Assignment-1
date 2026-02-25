@@ -310,6 +310,102 @@ void exec_with_path(struct command_t *command);// Helper function for exec
 
 int process_command(struct command_t *command) {
 
+  //Built-in Commands
+
+  int r;
+  if (strcmp(command->name, "") == 0)
+    return SUCCESS;
+
+  if (strcmp(command->name, "exit") == 0)
+    return EXIT;
+
+  if (strcmp(command->name, "cd") == 0) {
+    if (command->arg_count > 0) {
+      r = chdir(command->args[1]);
+      if (r == -1)
+        printf("-%s: %s: %s\n", sysname, command->name, strerror(errno));
+      return SUCCESS;
+    }
+  }
+  if (strcmp(command->name, "cut") == 0) {
+    
+    char delimiter = '\t'; // Deault delimeter is tab
+    char *fields_string = NULL;
+    int delimiter_seen = 0; 
+    int field_seen = 0;
+
+    for (int i = 1; command->args[i] != NULL; i++){
+    
+      if (strcmp(command->args[i], "-d") == 0 && delimiter_seen == 0){
+        if (command->args[i + 1] == NULL) {
+          printf("Missing delimiter\n");
+          return SUCCESS;
+    }
+        delimiter= command->args[i+1][0];
+        delimiter_seen++;
+        i++;
+      }
+
+      else if (strncmp(command->args[i], "-f", 2) == 0 && field_seen == 0) {
+    
+        fields_string = &command->args[i][2]; 
+
+        if (fields_string[0] == '\0') { // If nothing written after -f
+          printf("Missing field after -f\n");
+          return SUCCESS;
+      }
+        field_seen = 1;
+      }
+    }
+    if (field_seen == 0){ // Field has to be provided
+      printf("Missing field\n");
+      return SUCCESS;
+    }
+
+    //Turn Fields into int array
+    int fields[100];
+    int field_count = 0;
+    char temp[256];
+    strcpy(temp, fields_string);  //strtok change original string
+
+    char *token = strtok(temp, ",");
+    while (token != NULL) {
+        fields[field_count] = atoi(token);
+        field_count++;
+        token = strtok(NULL, ",");
+    }
+
+    // Read each line
+    char line[1024];
+    char delimeter_string[2] = { delimiter, '\0' };
+
+    while (fgets(line, sizeof(line), stdin) != NULL) {
+
+      char *running = line;// to protect first line
+      char *token;
+      int token_count = 0;
+      int printed = 0;
+
+      while ((token = strsep(&running, delimeter_string)) != NULL) {
+        token_count++;
+
+        for (int i = 0; i < field_count; i++){
+          if(token_count== fields[i]){
+            if (printed) {
+              printf("%c", delimiter);
+            }
+            printf("%s", token);
+            printed = 1;
+          }
+        }
+      }
+      printf("\n");
+    }
+    return SUCCESS;
+  }
+
+
+
   // PIPE HANDLING 
   if (command->next) {
 
@@ -346,100 +442,6 @@ int process_command(struct command_t *command) {
     return SUCCESS;
   }
   
-  //Built-in Commands
-
-  int r;
-  if (strcmp(command->name, "") == 0)
-    return SUCCESS;
-
-  if (strcmp(command->name, "exit") == 0)
-    return EXIT;
-
-  if (strcmp(command->name, "cd") == 0) {
-    if (command->arg_count > 0) {
-      r = chdir(command->args[1]);
-      if (r == -1)
-        printf("-%s: %s: %s\n", sysname, command->name, strerror(errno));
-      return SUCCESS;
-    }
-  }
-  if (strcmp(command->name, "cut") == 0) {
-
-    char delimiter = '\t'; // Deault delimeter is tab
-    char *fields_string = NULL;
-    int delimiter_seen = 0; 
-    int field_seen = 0;
-
-    for (int i = 1; command->args[i] != NULL; i++){
-    
-      if (strcmp(command->args[i], "-d") == 0 && delimiter_seen == 0){
-        if (command->args[i + 1] == NULL) {
-          printf("Missing delimiter\n");
-          return SUCCESS;
-    }
-        
-        delimiter= command->args[i+1][0];
-        delimiter_seen++;
-        i++;
-      }
-
-      else if (strcmp(command->args[i], "-f") == 0 && field_seen == 0) {
-    
-        if (command->args[i + 1] == NULL) {
-          printf("Missing field\n");
-          return SUCCESS;
-        }
-
-        fields_string = command->args[i + 1];
-        field_seen = 1;
-        i++;  
-      }
-    }
-    if (field_seen == 0){ // Field has to be provided
-      printf("Missing field\n");
-      return SUCCESS;
-    }
-
-    //Turn Fields into int array
-    int fields[100];
-    int field_count = 0;
-    char temp[256];
-    strcpy(temp, fields_string);  //strtok change original string
-
-    char *token = strtok(temp, ",");
-    while (token != NULL) {
-        fields[field_count] = atoi(token);
-        field_count++;
-        token = strtok(NULL, ",");
-    }
-
-    // Read each line
-    char line[1024];
-    char delimeter_string[2] = { delimiter, '\0' };
-
-    while (fgets(line, sizeof(line), stdin) != NULL) {
-      char *token = strtok(line, delimeter_string);
-      int token_count = 0;
-      int printed = 0;
-
-      while (token != NULL) {
-        token_count++;
-
-        for (int i = 0; i < field_count; i++){
-          if(token_count== fields[i]){
-            if (printed) {
-              printf("%c", delimiter);
-            }
-            printf("%s", token);
-            printed = 1;
-          }
-        }
-      token = strtok(NULL, delimeter_string);
-      }
-      printf("\n");
-    }
-    return SUCCESS;
-  }
 
   pid_t pid = fork();
   if (pid == 0) // child
