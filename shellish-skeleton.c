@@ -7,6 +7,8 @@
 #include <termios.h> // termios, TCSANOW, ECHO, ICANON
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/stat.h>
+
 const char *sysname = "shellish";
 
 enum return_codes {
@@ -306,6 +308,108 @@ int prompt(struct command_t *command) {
   tcsetattr(STDIN_FILENO, TCSANOW, &backup_termios);
   return SUCCESS;
 }
+
+// Part3-b Chatroom
+
+void run_chatroom(char *roomname, char *username) {
+    char room_path[256], my_pipe[256], buffer[1024], formatted_msg[1200];
+
+    // Create room folder and user pipe 
+    strcpy(room_path, "/tmp/chatroom-");
+    strcat(room_path, roomname);
+    mkdir(room_path, 0777); 
+
+    strcpy(my_pipe, room_path);
+    strcat(my_pipe, "/");
+    strcat(my_pipe, username);
+    mkfifo(my_pipe, 0666);
+
+    printf("Welcome to %s!\n", roomname);
+
+    // RECEIVER: Continuous reading 
+    if (fork() == 0) {
+        while (1) {
+            int fd = open(my_pipe, O_RDONLY);
+            if (fd != -1) {
+                int n = read(fd, buffer, sizeof(buffer));
+                if (n > 0) {
+                    /* Write the received message and refresh prompt using low-level write */
+                    write(STDOUT_FILENO, "\r", 1);
+                    write(STDOUT_FILENO, buffer, strlen(buffer));
+                    write(STDOUT_FILENO, "\n", 1);
+                    
+                    char prompt[512];
+                    strcpy(prompt, "[");
+                    strcat(prompt, roomname);
+                    strcat(prompt, "] ");
+                    strcat(prompt, username);
+                    strcat(prompt, " > ");
+                    write(STDOUT_FILENO, prompt, strlen(prompt));
+                }
+                close(fd);
+            }
+        }
+    }
+
+    // SENDER: Iterate directory using 'exec' 
+    while (1) {
+        printf("[%s] %s > ", roomname, username);
+        if (fgets(buffer, sizeof(buffer), stdin) == NULL) break;
+        buffer[strcspn(buffer, "\n")] = 0;
+
+        if (strlen(buffer) == 0) continue;
+
+        strcpy(formatted_msg, "[");
+        strcat(formatted_msg, roomname);
+        strcat(formatted_msg, "] ");
+        strcat(formatted_msg, username);
+        strcat(formatted_msg, ": ");
+        strcat(formatted_msg, buffer);
+
+        // Directory Traversal using exec(ls) and a pipe 
+        int p[2];
+        pipe(p);
+
+        if (fork() == 0) {
+            dup2(p[1], STDOUT_FILENO);
+            close(p[0]); close(p[1]);
+            execlp("ls", "ls", room_path, NULL);
+            exit(1);
+        }
+
+        /* Parent: Read 'ls' output from pipe using low-level read */
+        close(p[1]);
+        char ls_buffer[4096];
+        int bytes_read = read(p[0], ls_buffer, sizeof(ls_buffer) - 1);
+        
+        if (bytes_read > 0) {
+            ls_buffer[bytes_read] = '\0';
+            char *target_user = strtok(ls_buffer, "\n");
+            
+            while (target_user != NULL) {
+                /* Separate child for each user */
+                if (fork() == 0) {
+                    char target_path[512];
+                    strcpy(target_path, room_path);
+                    strcat(target_path, "/");
+                    strcat(target_path, target_user);
+
+                    int fd_w = open(target_path, O_WRONLY | O_NONBLOCK);
+                    if (fd_w != -1) {
+                        write(fd_w, formatted_msg, strlen(formatted_msg) + 1);
+                        close(fd_w);
+                    }
+                    exit(0);
+                }
+                target_user = strtok(NULL, "\n");
+            }
+        }
+        close(p[0]);
+        wait(NULL); 
+    }
+}
+
+
 void exec_with_path(struct command_t *command);// Helper function for exec
 
 int process_command(struct command_t *command) {
@@ -404,6 +508,16 @@ int process_command(struct command_t *command) {
     return SUCCESS;
   }
 
+  // Part3-b chatroom
+  if (strcmp(command->name, "chatroom") == 0) {
+    if (command->arg_count < 3) { // Expecting: chatroom <roomname> <username>
+      printf("Usage: chatroom <roomname> <username>\n");
+      return SUCCESS;
+    }
+    // command->args[1] is <roomname>, command->args[2] is <username>
+    run_chatroom(command->args[1], command->args[2]);
+    return SUCCESS;
+  }
 
 
   // PIPE HANDLING 
