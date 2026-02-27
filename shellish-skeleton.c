@@ -336,7 +336,7 @@ void run_chatroom(char *roomname, char *username) {
         if (n > 0) {
           // Write the received message and refresh prompt using low-level write 
           write(STDOUT_FILENO, "\r", 1);
-          write(STDOUT_FILENO, buffer, strlen(buffer));
+          write(STDOUT_FILENO, buffer, n);
           write(STDOUT_FILENO, "\n", 1);
                     
           char prompt[512];
@@ -389,6 +389,10 @@ void run_chatroom(char *roomname, char *username) {
         char *target_user = strtok(ls_buffer, "\n");
             
         while (target_user != NULL) {
+          if (strcmp(target_user, username) == 0) {
+            target_user = strtok(NULL, "\n");
+            continue;
+          }
           // Separate child for each user 
           if (fork() == 0) {
             char target_path[512];
@@ -398,7 +402,7 @@ void run_chatroom(char *roomname, char *username) {
 
             int fd_w = open(target_path, O_WRONLY | O_NONBLOCK);
             if (fd_w != -1) {
-              write(fd_w, formatted_msg, strlen(formatted_msg) + 1);
+              write(fd_w, formatted_msg, strlen(formatted_msg));
               close(fd_w);
             }
             exit(0);
@@ -683,6 +687,48 @@ void exec_with_path(struct command_t *command);// Helper function for exec writt
 
 int process_command(struct command_t *command) {
 
+
+  // PIPE HANDLING 
+  if (command->next) {
+
+    int fd[2];
+    pipe(fd); // fd[0] = read end, fd[1] = write end
+
+    pid_t pid1 = fork();
+
+    if (pid1 == 0) { // first child 
+      dup2(fd[1], STDOUT_FILENO); // Redirect stdout to pipe write end
+      close(fd[0]);
+      close(fd[1]);
+
+      exec_with_path(command);   
+      exit(1);
+    }
+    pid_t pid2 = fork();
+
+    if (pid2 == 0) { // second child 
+      dup2(fd[0], STDIN_FILENO); // Redirect stdin to pipe read end
+      close(fd[1]);
+      close(fd[0]);
+
+      process_command(command->next); // Recursively call next
+      exit(0);
+    }
+    // Close pipe
+    close(fd[0]);
+    close(fd[1]);
+    // Wait for children to finish
+    waitpid(pid1, NULL, 0);
+    waitpid(pid2, NULL, 0);
+
+    return SUCCESS;
+  }
+
+
+
+
+
+
   //Built-in Commands
 
   int r;
@@ -799,41 +845,14 @@ int process_command(struct command_t *command) {
     return SUCCESS;
   }
 
-  // PIPE HANDLING 
-  if (command->next) {
 
-    int fd[2];
-    pipe(fd); // fd[0] = read end, fd[1] = write end
 
-    pid_t pid1 = fork();
 
-    if (pid1 == 0) { // first child 
-      dup2(fd[1], STDOUT_FILENO); // Redirect stdout to pipe write end
-      close(fd[0]);
-      close(fd[1]);
 
-      exec_with_path(command);   
-      exit(1);
-    }
-    pid_t pid2 = fork();
 
-    if (pid2 == 0) { // second child 
-      dup2(fd[0], STDIN_FILENO); // Redirect stdin to pipe read end
-      close(fd[1]);
-      close(fd[0]);
 
-      process_command(command->next); // Recursively call next
-      exit(0);
-    }
-    // Close pipe
-    close(fd[0]);
-    close(fd[1]);
-    // Wait for children to finish
-    waitpid(pid1, NULL, 0);
-    waitpid(pid2, NULL, 0);
 
-    return SUCCESS;
-  }
+
   
 
   pid_t pid = fork();
