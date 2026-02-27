@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <ctype.h>
 
 const char *sysname = "shellish";
 
@@ -312,105 +313,373 @@ int prompt(struct command_t *command) {
 // Part3-b Chatroom
 
 void run_chatroom(char *roomname, char *username) {
-    char room_path[256], my_pipe[256], buffer[1024], formatted_msg[1200];
+  char room_path[256], my_pipe[256], buffer[1024], formatted_msg[1200];
 
-    // Create room folder and user pipe 
-    strcpy(room_path, "/tmp/chatroom-");
-    strcat(room_path, roomname);
-    mkdir(room_path, 0777); 
+  // Create room folder and user pipe 
+  strcpy(room_path, "/tmp/chatroom-");
+  strcat(room_path, roomname);
+  mkdir(room_path, 0777); 
 
-    strcpy(my_pipe, room_path);
-    strcat(my_pipe, "/");
-    strcat(my_pipe, username);
-    mkfifo(my_pipe, 0666);
+  strcpy(my_pipe, room_path);
+  strcat(my_pipe, "/");
+  strcat(my_pipe, username);
+  mkfifo(my_pipe, 0666);
 
-    printf("Welcome to %s!\n", roomname);
+  printf("Welcome to %s!\n", roomname);
 
-    // RECEIVER: Continuous reading 
-    if (fork() == 0) {
-        while (1) {
-            int fd = open(my_pipe, O_RDONLY);
-            if (fd != -1) {
-                int n = read(fd, buffer, sizeof(buffer));
-                if (n > 0) {
-                    /* Write the received message and refresh prompt using low-level write */
-                    write(STDOUT_FILENO, "\r", 1);
-                    write(STDOUT_FILENO, buffer, strlen(buffer));
-                    write(STDOUT_FILENO, "\n", 1);
-                    
-                    char prompt[512];
-                    strcpy(prompt, "[");
-                    strcat(prompt, roomname);
-                    strcat(prompt, "] ");
-                    strcat(prompt, username);
-                    strcat(prompt, " > ");
-                    write(STDOUT_FILENO, prompt, strlen(prompt));
-                }
-                close(fd);
-            }
-        }
-    }
-
-    // SENDER: Iterate directory using 'exec' 
+  // RECEIVER: Continuous reading 
+  if (fork() == 0) {
     while (1) {
-        printf("[%s] %s > ", roomname, username);
-        if (fgets(buffer, sizeof(buffer), stdin) == NULL) break;
-        buffer[strcspn(buffer, "\n")] = 0;
-
-        if (strlen(buffer) == 0) continue;
-
-        strcpy(formatted_msg, "[");
-        strcat(formatted_msg, roomname);
-        strcat(formatted_msg, "] ");
-        strcat(formatted_msg, username);
-        strcat(formatted_msg, ": ");
-        strcat(formatted_msg, buffer);
-
-        // Directory Traversal using exec(ls) and a pipe 
-        int p[2];
-        pipe(p);
-
-        if (fork() == 0) {
-            dup2(p[1], STDOUT_FILENO);
-            close(p[0]); close(p[1]);
-            execlp("ls", "ls", room_path, NULL);
-            exit(1);
+      int fd = open(my_pipe, O_RDONLY);
+      if (fd != -1) {
+        int n = read(fd, buffer, sizeof(buffer));
+        if (n > 0) {
+          // Write the received message and refresh prompt using low-level write 
+          write(STDOUT_FILENO, "\r", 1);
+          write(STDOUT_FILENO, buffer, strlen(buffer));
+          write(STDOUT_FILENO, "\n", 1);
+                    
+          char prompt[512];
+          strcpy(prompt, "[");
+          strcat(prompt, roomname);
+          strcat(prompt, "] ");
+          strcat(prompt, username);
+          strcat(prompt, " > ");
+          write(STDOUT_FILENO, prompt, strlen(prompt));
         }
-
-        /* Parent: Read 'ls' output from pipe using low-level read */
-        close(p[1]);
-        char ls_buffer[4096];
-        int bytes_read = read(p[0], ls_buffer, sizeof(ls_buffer) - 1);
-        
-        if (bytes_read > 0) {
-            ls_buffer[bytes_read] = '\0';
-            char *target_user = strtok(ls_buffer, "\n");
-            
-            while (target_user != NULL) {
-                /* Separate child for each user */
-                if (fork() == 0) {
-                    char target_path[512];
-                    strcpy(target_path, room_path);
-                    strcat(target_path, "/");
-                    strcat(target_path, target_user);
-
-                    int fd_w = open(target_path, O_WRONLY | O_NONBLOCK);
-                    if (fd_w != -1) {
-                        write(fd_w, formatted_msg, strlen(formatted_msg) + 1);
-                        close(fd_w);
-                    }
-                    exit(0);
-                }
-                target_user = strtok(NULL, "\n");
-            }
-        }
-        close(p[0]);
-        wait(NULL); 
+        close(fd);
+      }
     }
+  }
+
+  // SENDER: Iterate directory using 'exec' 
+  while (1) {
+    printf("[%s] %s > ", roomname, username);
+    if (fgets(buffer, sizeof(buffer), stdin) == NULL) break;
+      buffer[strcspn(buffer, "\n")] = 0;
+
+    if (strlen(buffer) == 0) continue;
+
+      strcpy(formatted_msg, "[");
+      strcat(formatted_msg, roomname);
+      strcat(formatted_msg, "] ");
+      strcat(formatted_msg, username);
+      strcat(formatted_msg, ": ");
+      strcat(formatted_msg, buffer);
+
+      // Directory Traversal using exec(ls) and a pipe 
+      int p[2];
+      pipe(p);
+
+      if (fork() == 0) {
+        dup2(p[1], STDOUT_FILENO);
+        close(p[0]); 
+        close(p[1]);
+        execlp("ls", "ls", room_path, NULL);
+        exit(1);
+      }
+
+      // Parent
+      close(p[1]);
+      char ls_buffer[4096];
+      int bytes_read = read(p[0], ls_buffer, sizeof(ls_buffer) - 1);
+        
+      if (bytes_read > 0) {
+        ls_buffer[bytes_read] = '\0';
+        char *target_user = strtok(ls_buffer, "\n");
+            
+        while (target_user != NULL) {
+          // Separate child for each user 
+          if (fork() == 0) {
+            char target_path[512];
+            strcpy(target_path, room_path);
+            strcat(target_path, "/");
+            strcat(target_path, target_user);
+
+            int fd_w = open(target_path, O_WRONLY | O_NONBLOCK);
+            if (fd_w != -1) {
+              write(fd_w, formatted_msg, strlen(formatted_msg) + 1);
+              close(fd_w);
+            }
+            exit(0);
+          }
+          target_user = strtok(NULL, "\n");
+        }
+    }
+    close(p[0]);
+    wait(NULL); 
+  }
 }
 
+// Helper
+void print_board(char board[10][10], char *title) {
+  char header[128];
+  sprintf(header, "\n--- %s ---\n    A B C D E F G H I J\n", title);
+  write(STDOUT_FILENO, header, strlen(header));
+  write(STDOUT_FILENO, "   --------------------\n", 24);
 
-void exec_with_path(struct command_t *command);// Helper function for exec
+  for (int i = 0; i < 10; i++) {
+    char row_num[10];
+    sprintf(row_num, "%2d |", i + 1);
+    write(STDOUT_FILENO, row_num, strlen(row_num));
+    for (int j = 0; j < 10; j++) {
+      write(STDOUT_FILENO, &board[i][j], 1);
+      write(STDOUT_FILENO, " ", 1);
+    }
+    write(STDOUT_FILENO, "\n", 1);
+  }
+  write(STDOUT_FILENO, "\n", 1);
+}
+
+// Helper for battleship
+void send_to_other(char *room_path, char *my_name, char *msg) {
+  int p[2];
+  // Create anonymous pipe 
+  if (pipe(p) == -1) return;
+
+  // Child process: execute "ls" to list all users
+  if (fork() == 0) {
+    dup2(p[1], STDOUT_FILENO);
+    close(p[0]);
+    close(p[1]);
+    execlp("ls", "ls", room_path, NULL);
+    exit(1);
+  }
+  // Parent process reads the output of "ls"
+  close(p[1]);
+  char ls_buf[1024];
+  int n = read(p[0], ls_buf, sizeof(ls_buf) - 1);
+  close(p[0]);
+
+  if (n > 0) {
+    ls_buf[n] = '\0';
+    char *user = strtok(ls_buf, "\n");
+    while (user != NULL) {
+    // We dont send ourselves a message
+      if (strcmp(user, my_name) != 0) {
+        if (fork() == 0) {
+          char target_path[512];
+          sprintf(target_path, "%s/%s", room_path, user);
+          int fd = open(target_path, O_WRONLY | O_NONBLOCK);
+          if (fd != -1) {
+            write(fd, msg, strlen(msg) + 1);
+            close(fd);
+          }
+          exit(0);
+        }
+      }
+      user = strtok(NULL, "\n");
+    }
+  }
+  // Wait for children
+  while (waitpid(-1, NULL, WNOHANG) > 0);
+}
+
+//Helper ship placer for Battle Ship
+void place_ship(char board[10][10], char *coord_str) {
+  char c1_c, c2_c; // Starting and ending column letters (A–J)
+  int r1, r2; // Starting and ending row numbers (1–10)
+  if (sscanf(coord_str, " %c%d:%c%d", &c1_c, &r1, &c2_c, &r2) == 4) {
+    int start_row = r1 - 1;
+    int end_row = r2 - 1;
+    int start_col = toupper(c1_c) - 'A';
+    int end_col = toupper(c2_c) - 'A';
+
+    // Mark S which means ship
+    for (int i = start_row; i <= end_row; i++) {
+      for (int j = start_col; j <= end_col; j++) {
+        if (i >= 0 && i < 10 && j >= 0 && j < 10) {
+          board[i][j] = 'S';
+        }
+      }
+    }
+      print_board(board, "SHIP PLACED");
+  }
+}
+//Helper for Battle Ship
+int all_ships_destroyed(char board[10][10]) {
+  for (int i = 0; i < 10; i++) {
+    for (int j = 0; j < 10; j++) {
+      if (board[i][j] == 'S') {
+        return 0; // still there is a ship
+      }
+    }
+  }
+  return 1; // All ships drowned
+}
+
+// PART 3-c Custom Command : Amiral Battı (Sea Battle)
+void run_battleship(char *roomname, char *username) {
+
+  char room_path[512], my_pipe[1024], buffer[2048];
+  static char my_board[10][10];
+  static char enemy_view[10][10];
+  int receiver_started = 0;
+
+  // Initialize boards
+  for (int i = 0; i < 10; i++) {
+    for (int j = 0; j < 10; j++) {
+      my_board[i][j] = '.';
+      enemy_view[i][j] = '.';
+    }
+  }
+
+  // Setup room + fifo
+  strcpy(room_path, "/tmp/chatroom-");
+  strncat(room_path, roomname, sizeof(room_path) - strlen(room_path) - 1);
+  mkdir(room_path, 0777);
+  sprintf(my_pipe, "%s/%s", room_path, username);
+  mkfifo(my_pipe, 0666);
+
+  const char *intro =
+        "\n--- BATTLESHIP: CURLYBOI EDITION ---\n"
+        "Instructions:\n"
+        "  1) place your ships  (example: place C3:C5)\n"
+        "  2) ready\n"
+        "  3) attack            (example: attack A1)\n"
+        "  4) enjoy!\n\n";
+  write(STDOUT_FILENO, intro, strlen(intro));
+
+  while (1) {
+    write(STDOUT_FILENO, "BattleCommand> ", 15);
+    if (fgets(buffer, sizeof(buffer), stdin) == NULL)break;
+    buffer[strcspn(buffer, "\n")] = 0;
+    // --- READY ---
+    // Player indicates readiness
+    if (strcmp(buffer, "ready") == 0) {
+      if (receiver_started) {
+        write(STDOUT_FILENO,"You are already ready!\n", strlen("You are already ready!\n"));
+        continue;
+      }
+      send_to_other(room_path, username, "READY_MSG");
+      write(STDOUT_FILENO,"Board confirmed. Waiting for opponent...\n", strlen("Board confirmed. Waiting for opponent...\n"));
+      print_board(my_board, "MY FINAL BOARD");
+
+      // Start receiver process
+      if (fork() == 0) {
+        while (1) {
+          int fd = open(my_pipe, O_RDONLY);
+          if (fd == -1) continue;
+
+          char rx_buf[2048];
+          int n = read(fd, rx_buf, sizeof(rx_buf) - 1);
+          close(fd);
+
+          if (n <= 0) continue;
+          rx_buf[n] = '\0';
+
+          // --- ATTACK RECEIVED--- 
+          if (strncmp(rx_buf, "ATTACK:", 7) == 0) {
+            char col_c = rx_buf[7];
+            int row = atoi(rx_buf + 8);
+            int r = row - 1;
+            int c = toupper(col_c) - 'A';
+            char result_msg[64];
+
+            if (my_board[r][c] == 'S') {
+              my_board[r][c] = 'X'; //Marks as hitted
+
+              sprintf(result_msg,"RESULT:HIT:%c%d",col_c,row);
+              send_to_other(room_path,username,result_msg); // Sends result to enemy
+
+              write(STDOUT_FILENO,"\n[!!!] WE GOT HIT! (",strlen("\n[!!!] WE GOT HIT! ("));
+              write(STDOUT_FILENO,rx_buf + 7,strlen(rx_buf + 7));
+              write(STDOUT_FILENO,")\n",2);
+
+              if (all_ships_destroyed(my_board)) {
+
+              sprintf(result_msg,"RESULT:WIN:%c%d",col_c,row);
+              send_to_other(room_path,username,result_msg);
+              write(STDOUT_FILENO,"\n*** GAME OVER - YOU LOST ***\n",31);
+              exit(0);
+              }
+            }
+            else {
+              if (my_board[r][c] == '.') my_board[r][c] = 'O';
+
+              sprintf(result_msg,"RESULT:MISS:%c%d",col_c,row);
+              send_to_other(room_path,username,result_msg);
+              write(STDOUT_FILENO,"\n[MISS] Opponent missed.\n",strlen("\n[MISS] Opponent missed.\n"));
+            }
+
+            print_board(my_board, "MY BOARD STATUS");
+            write(STDOUT_FILENO, "BattleCommand> ", 15);
+          }
+
+          // ---RESULT RECEIVED ---
+          else if (strncmp(rx_buf, "RESULT:", 7) == 0) {
+
+            char *ptr = rx_buf + 7;// HIT:A5
+            char *colon = strchr(ptr, ':');
+            if (!colon) return;
+
+            *colon = '\0';
+            char *type = ptr;// HIT / MISS / WIN
+            char *coord = colon + 1;// A5
+            char col_c = coord[0];
+            int row = coord[1] - '0';
+            int r = row - 1;
+            int c = toupper(col_c) - 'A';
+      
+            if (strcmp(type, "HIT") == 0) {
+              enemy_view[r][c] = 'X';
+              write(STDOUT_FILENO, "\n[HIT] Direct hit!\n", strlen("\n[HIT] Direct hit!\n"));
+            } 
+            else if (strcmp(type, "WIN") == 0) {
+              enemy_view[r][c] = 'X';
+              write(STDOUT_FILENO, "\n*** YOU WON! ***\n", strlen("\n*** YOU WON! ***\n"));
+              print_board(enemy_view, "ENEMY BOARD");
+              exit(0);
+            } 
+            else {  // MISS
+              enemy_view[r][c] = 'O';
+              write(STDOUT_FILENO, "\n[MISS] Shot missed.\n", strlen("\n[MISS] Shot missed.\n"));
+            }
+            print_board(enemy_view, "ENEMY BOARD");
+            write(STDOUT_FILENO, "BattleCommand> ", 15);
+          }
+
+          // --- READY RECEIVED ---
+          else if (strcmp(rx_buf, "READY_MSG") == 0) {
+            write(STDOUT_FILENO,"\n[!] Enemy is ready: Let the battle begin!!!\n",strlen("\n[!] Enemy is ready: Let the battle begin!!!\n"));
+            write(STDOUT_FILENO,"BattleCommand> ",15);
+          }
+        }
+        exit(0);
+      }
+      receiver_started = 1; // Means game started
+    }
+    // --- PLACE ---
+    else if (strncmp(buffer, "place ", 6) == 0) {
+      if (receiver_started) { // Cannot place after game started
+        write(STDOUT_FILENO,"Game already started. You cannot place ships anymore.\n",strlen("Game already started. You cannot place ships anymore.\n"));
+      }
+      else {
+      place_ship(my_board, buffer + 6);
+      }
+    }
+    // ---ATTACK ---
+    else if (strncmp(buffer, "attack ", 7) == 0) { // Checks if ready was written
+      if (!receiver_started) {
+        write(STDOUT_FILENO,"Type 'ready' first!!!\n",strlen("Type 'ready' first!!!\n"));
+      }
+      else {
+        char attack_msg[64];
+        sprintf(attack_msg,"ATTACK:%s",buffer + 7);
+        send_to_other(room_path,username,attack_msg); //Message send to enemy fifo
+      }
+    }
+    // Show
+    else if (strcmp(buffer, "show") == 0) {
+      print_board(my_board, "MY BOARD");
+    }
+    // Exit
+    else if (strcmp(buffer, "exit") == 0) {
+      break;
+    }
+  }
+}
+void exec_with_path(struct command_t *command);// Helper function for exec written under process command
 
 int process_command(struct command_t *command) {
 
@@ -518,7 +787,17 @@ int process_command(struct command_t *command) {
     run_chatroom(command->args[1], command->args[2]);
     return SUCCESS;
   }
-
+  //Part3-c amiral battı
+  if (strcmp(command->name, "battleship") == 0) {
+    if (command->arg_count < 2) {
+      write(STDOUT_FILENO, "Usage: battleship <roomname> <username>\n", 40);
+    } 
+    else {
+    // command->args[1] is <roomname>, command->args[2] is <username>
+    run_battleship(command->args[1], command->args[2]);
+    }
+    return SUCCESS;
+  }
 
   // PIPE HANDLING 
   if (command->next) {
